@@ -156,7 +156,7 @@ void ParseOptionsIndex(int argc, char **argv, ProgramOptions& opt) {
 
 void ParseOptionsInspect(int argc, char **argv, ProgramOptions& opt) {
 
-  const char *opt_string = "G:g:b:t:";
+  const char *opt_string = "G:g:b:t:D:L:";
 
   int para_flag = 0;
   static struct option long_options[] = {
@@ -165,6 +165,8 @@ void ParseOptionsInspect(int argc, char **argv, ProgramOptions& opt) {
     {"gtf", required_argument, 0, 'g'},
     {"bed", required_argument, 0, 'b'},
     {"threads", required_argument, 0, 't'},
+    {"ec-dump", required_argument, 0, 'D'},
+    {"ec-dump-limit", required_argument, 0, 'L'},
     {"paranoid", no_argument, &para_flag, 1},
     {0,0,0,0}
   };
@@ -198,6 +200,14 @@ void ParseOptionsInspect(int argc, char **argv, ProgramOptions& opt) {
       if (opt.threads <= 0) opt.threads = 1;
       break;
     }
+    case 'D': {
+      opt.index_ec_dump_file = optarg;
+      break;
+    }
+    case 'L': {
+      stringstream(optarg) >> opt.index_ec_dump_limit;
+      break;
+    }
     default: break;
     }
   }
@@ -224,7 +234,7 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
   int do_union_flag = 0;
   int no_jump_flag = 0;
 
-  const char *opt_string = "t:i:l:P:s:o:n:m:d:b:g:c:p:";
+  const char *opt_string = "t:i:l:P:s:o:n:m:d:b:g:c:p:E:R:J:K:M:";
   static struct option long_options[] = {
     // long args
     {"verbose", no_argument, &verbose_flag, 1},
@@ -240,6 +250,11 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
     {"genomebam", no_argument, &gbam_flag, 1},
     {"fusion", no_argument, &fusion_flag, 1},
     {"seed", required_argument, 0, 'd'},
+    {"ec-trace", required_argument, 0, 'E'},
+    {"ec-trace-max-reads", required_argument, 0, 'R'},
+    {"hit-dump", required_argument, 0, 'J'},
+    {"kmer-dump", required_argument, 0, 'K'},
+    {"kmer-dump-max-reads", required_argument, 0, 'M'},
     // short args
     {"threads", required_argument, 0, 't'},
     {"index", required_argument, 0, 'i'},
@@ -318,6 +333,26 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
     }
     case 'p': {
       opt.priors = optarg;
+      break;
+    }
+    case 'E': {
+      opt.ec_trace_file = optarg;
+      break;
+    }
+    case 'R': {
+      stringstream(optarg) >> opt.ec_trace_max_reads;
+      break;
+    }
+    case 'J': {
+      opt.hit_dump_file = optarg;
+      break;
+    }
+    case 'K': {
+      opt.kmer_dump_file = optarg;
+      break;
+    }
+    case 'M': {
+      stringstream(optarg) >> opt.kmer_dump_max_reads;
       break;
     }
 
@@ -2165,7 +2200,10 @@ void usageInspect() {
   cout << "kallisto " << KALLISTO_VERSION << endl << endl
        << "Usage: kallisto inspect INDEX-file" << endl << endl
        << "Optional arguments:" << endl
-       << "-t                      Number of threads" << endl << endl;
+       << "-t                      Number of threads" << endl
+       << "    --ec-dump=FILE       Dump a subset of k-mers/minimizers and ECs" << endl
+       << "    --ec-dump-limit=INT  Maximum number of k-mers to dump (default: 1000)" << endl
+       << endl;
 }
 
 void usageEM(bool valid_input = true) {
@@ -2198,7 +2236,12 @@ void usageEM(bool valid_input = true) {
        << "                              prevent zero valued priors. Supplied in the same order" << endl
        << "                              as the transcripts in the transcriptome" << endl
        << "-t, --threads=INT             Number of threads to use (default: 1)" << endl
-       << "    --verbose                 Print out progress information every 1M proccessed reads" << endl;
+       << "    --verbose                 Print out progress information every 1M proccessed reads" << endl
+       << "    --ec-trace=FILE            Per-read EC trace (hits, intersections, final EC)" << endl
+       << "    --ec-trace-max-reads=INT   Limit per-read trace to first N reads (default: 0 = all)" << endl
+       << "    --hit-dump=FILE            Dump unitig/block hits per read" << endl
+       << "    --kmer-dump=FILE           Dump every inspected k-mer per read" << endl
+       << "    --kmer-dump-max-reads=INT  Limit k-mer dump to first N reads (default: 0 = all)" << endl;
 
 }
 

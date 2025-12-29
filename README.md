@@ -1,6 +1,41 @@
-# kallisto
+# kallisto_instrumented (fork)
 
-__kallisto__ is a program for quantifying abundances of transcripts from
+Instrumented fork of pachterlab kallisto (near-optimal RNA sequencing quantification) with extra tracing/debug outputs for algorithm validation and reimplementations. This fork is for debugging and validation only and is not intended for production use.
+
+Upstream: https://github.com/pachterlab/kallisto
+
+## Instrumentation summary
+
+This fork adds optional debug outputs to trace pseudoalignment internals, per-read EC evolution, per-k-mer decisions, and selected index EC mappings. The outputs are file-based and are only produced when the corresponding flags are provided.
+
+## Changes vs upstream
+
+- Adds optional debug/trace outputs for EC evolution, per-k-mer decisions, minimizer metadata, and hit dumps.
+- Adds an index-level EC dump for validating EC mappings and on-list handling.
+- Keeps core algorithm behavior intact when debug flags are not used.
+
+## Debug/trace flags (instrumented fork only)
+
+All flags write tab-delimited output to the file path you provide.
+
+- `--ec-trace=FILE` Dump per-read EC tracing with intersection steps and final ECs.
+- `--ec-trace-max-reads=INT` Limit EC tracing to the first N reads (0 = all).
+- `--hit-dump=FILE` Dump per-read unitig hit details (includes k-mer strings).
+- `--ec-dump=FILE` Dump a subset of index k-mers/minimizers and ECs.
+- `--ec-dump-limit=INT` Limit the number of k-mers/minimizers dumped (0 = all).
+- `--kmer-dump=FILE` Dump every inspected k-mer per read with hit/skip decisions, minimizer flags, and jump info.
+- `--kmer-dump-max-reads=INT` Limit k-mer dump to the first N reads (0 = all).
+
+Notes on `--kmer-dump` output fields:
+- Includes per-k-mer `hit_action` (`accept`/`skip`) and `skip_reason` (`empty`, `intersection_empty`, or `-`).
+- Includes minimizer fields (`minimizer`, `minimizer_pos`, `minimizer_is_special`, `minimizer_is_overcrowded`, `minimizer_is_abundant`, `minimizer_hit_count`) and jump info (`jump_used`, `jump_from_pos`, `jump_to_pos`).
+
+## Not for production use
+
+These tracing paths are for algorithm inspection and validation. They add overhead and are not intended for production quantification or benchmarking.
+
+## kallisto description
+_kallisto__ is a program for quantifying abundances of transcripts from
 RNA-Seq data, or more generally of target sequences using high-throughput
 sequencing reads. It is based on the novel idea of _pseudoalignment_ for
 rapidly determining the compatibility of reads with targets, without the need
@@ -16,33 +51,11 @@ significantly outperforms existing tools. The __kallisto__ algorithms are descri
 
 NL Bray, H Pimentel, P Melsted and L Pachter, [Near optimal probabilistic RNA-seq quantification](http://www.nature.com/nbt/journal/v34/n5/abs/nbt.3519.html), Nature Biotechnology __34__, p 525--527 (2016).
 
-Scripts reproducing all the results of the paper are available [here](https://github.com/pachterlab/kallisto_paper_analysis).
 
-__kallisto__ quantified bulk RNA-Seq can be analyzed with [__sleuth__](https://github.com/pachterlab/sleuth/).
-
-__kallisto__ can be used together with [__bustools__](https://bustools.github.io/) to pre-process single-cell RNA-seq data. See the [kallistobus.tools](https://www.kallistobus.tools/) website for instructions.
-
-## Manual
-
-Please visit http://pachterlab.github.io/kallisto/manual.html for the manual.
 
 ## License
 
-__kallisto__ is distributed under the BSD-2 license. The license is distributed with __kallisto__ in the file `license.txt`, which is also viewable [here](https://pachterlab.github.io/kallisto/download). Please read the license before using __kallisto__.
-
+The project is distributed under the BSD-2 license.
 ## Getting help
 
-For help running __kallisto__, please post to the [kallisto-and-applications Google Group](https://groups.google.com/forum/#!forum/kallisto-and-applications).
-
-## Reporting bugs
-
-Please report bugs to the [Github issues page](https://github.com/pachterlab/kallisto/issues)
-
-## Development and pull requests
-
-We typically develop on separate branches, then merge into devel once features
-have been sufficiently tested. `devel` is the latest, stable, development
-branch. `master` is used only for official releases and is considered to be
-stable. If you submit a pull request (thanks!) please make sure to request to
-merge into `devel` and NOT `master`. Merges usually only go into `master`, but
-not out.
+If you need help or want to report issues with this fork, use the fork repository issues page: https://github.com/deminden/kallisto_instrumented/issues

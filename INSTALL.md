@@ -13,13 +13,13 @@ Installation
 1. First clone the repository:
 
     ```
-    git clone https://github.com/pachterlab/kallisto.git
+    git clone https://github.com/deminden/kallisto_instrumented.git
     ```
 
 1. Move to the source directory:
 
     ```
-    cd kallisto
+    cd kallisto_instrumented
     ```
 
 1. Make a build directory and move there
@@ -56,3 +56,5 @@ Installation
 
 After performing these steps, you can simply build using make as long as new
 source files aren't introduced or the `CMakeLists.txt` scripts aren't modified.
+
+Note: this fork includes extra debug/tracing instrumentation and is not intended for production use.

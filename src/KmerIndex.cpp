@@ -13,6 +13,16 @@
 #include <set>
 #include "ColoredCDBG.hpp"
 
+thread_local KmerDumpContext* g_kmer_dump_ctx = nullptr;
+
+void SetKmerDumpContext(KmerDumpContext* ctx) {
+  g_kmer_dump_ctx = ctx;
+}
+
+void ClearKmerDumpContext() {
+  g_kmer_dump_ctx = nullptr;
+}
+
 // --aa option helper functions
 // first three letters of nucleotide seq -> comma-free nuc_seq
 // the three stop codons will be translated to 'NNN'
@@ -1755,7 +1765,66 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
 
     int pos = kit->second;
 
+    int jump_used = 0;
+    int jump_from_pos = -1;
+    int jump_to_pos = -1;
+    std::string minimizer_str = "-";
+    int minimizer_pos = -1;
+    int minimizer_is_special = 0;
+    int minimizer_is_overcrowded = 0;
+    int minimizer_is_abundant = 0;
+    int minimizer_hit_count = -1;
+    const char* hit_action = "skip";
+    std::string skip_reason = "empty";
+    bool dumped = false;
+    bool dump_enabled = g_kmer_dump_ctx && g_kmer_dump_ctx->out && g_kmer_dump_ctx->out_mutex;
+    if (dump_enabled) {
+      CompactedDBG<Node>::MinimizerDebugInfo min_info;
+      if (dbg.getMinimizerDebug(kit->first, min_info) && min_info.valid) {
+        minimizer_str = min_info.minimizer.toString();
+        minimizer_pos = min_info.minimizer_pos;
+        minimizer_is_special = min_info.is_special ? 1 : 0;
+        minimizer_is_overcrowded = min_info.is_overcrowded ? 1 : 0;
+        minimizer_is_abundant = min_info.is_abundant ? 1 : 0;
+        minimizer_hit_count = min_info.hit_count;
+      }
+    }
+    auto dump_kmer = [&]() {
+      if (!dump_enabled || dumped) {
+        return;
+      }
+      bool is_dlist = !d_list.empty() && (d_list.find(kit->first.rep()) != d_list.end());
+      bool is_dummy = is_dlist && (kit->first.rep() == dummy_dfk);
+      std::ostringstream line;
+      line << g_kmer_dump_ctx->read_id
+           << "\t" << g_kmer_dump_ctx->read_name
+           << "\t" << (g_kmer_dump_ctx->part ? g_kmer_dump_ctx->part : "-")
+           << "\t" << i
+           << "\t" << pos
+           << "\t" << kit->first.toString()
+           << "\t" << (um.isEmpty ? 0 : 1)
+           << "\t" << (is_dlist ? 1 : 0)
+           << "\t" << (is_dummy ? 1 : 0)
+           << "\t" << minimizer_str
+           << "\t" << minimizer_pos
+           << "\t" << minimizer_is_special
+           << "\t" << minimizer_is_overcrowded
+           << "\t" << minimizer_is_abundant
+           << "\t" << minimizer_hit_count
+           << "\t" << jump_used
+           << "\t" << jump_from_pos
+           << "\t" << jump_to_pos
+           << "\t" << hit_action
+           << "\t" << skip_reason
+           << "\n";
+      std::lock_guard<std::mutex> lock(*g_kmer_dump_ctx->out_mutex);
+      (*g_kmer_dump_ctx->out) << line.str();
+      dumped = true;
+    };
+
     if (!um.isEmpty) {
+      hit_action = "accept";
+      skip_reason = "-";
       
       if (partial) {
         if (rtmp.isEmpty()) {
@@ -1765,6 +1834,9 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
           const auto& rtmp2 = um.getData()->ec[um.dist].getIndices();
           if (!rtmp2.isEmpty()) rtmp &= rtmp2;
           if (rtmp.isEmpty()) {
+            hit_action = "skip";
+            skip_reason = "intersection_empty";
+            dump_kmer();
             v.clear();
             return;
           }
@@ -1773,7 +1845,10 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
 
       v.push_back({um, kit->second});
       
-      if (no_jump) continue;
+      if (no_jump) {
+        dump_kmer();
+        continue;
+      }
 
       // Find start and end of O.G. kallisto contig w.r.t. the bifrost-kallisto
       // unitig
@@ -1817,13 +1892,20 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
             // great, a match (or nothing) see if we can move the k-mer forward
             bool is_in_dlist = um2.isEmpty && d_list.size() > 0 && (d_list.find((kit2->first).rep()) != d_list.end()); // D-list (check after first jump)
             if (found2pos >= l-k) {
+              jump_used = 1;
+              jump_from_pos = pos;
+              jump_to_pos = nextPos;
               v.push_back({um, l-k}); // push back a fake position
-              if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); return; } // D-list
+              if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); dump_kmer(); return; } // D-list
+              dump_kmer();
               break; //
             } else {
+              jump_used = 1;
+              jump_from_pos = pos;
+              jump_to_pos = nextPos;
               v.push_back({um, found2pos});
               kit = kit2; // move iterator to this new position
-              if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); return; } // D-list
+              if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); dump_kmer(); return; } // D-list
             }
           } else {
             // this is weird, let's try the middle k-mer
@@ -1855,18 +1937,28 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
                       const auto& rtmp2 = um3.getData()->ec[um3.dist].getIndices();
                       if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
                     } else {
-                      const auto& rtmp2 = um3.getData()->ec[um3.dist].getIndices();
-                      if (!rtmp2.isEmpty()) rtmp &= rtmp2;
-                      if (rtmp.isEmpty()) {
-                        v.clear();
-                        return;
-                      }
-                    }
-                  }
+                const auto& rtmp2 = um3.getData()->ec[um3.dist].getIndices();
+                if (!rtmp2.isEmpty()) rtmp &= rtmp2;
+                if (rtmp.isEmpty()) {
+                  hit_action = "skip";
+                  skip_reason = "intersection_empty";
+                  dump_kmer();
+                  v.clear();
+                  return;
+                }
+              }
+            }
                   v.push_back({um3, found3pos});
                   if (nextPos >= l-k) {
+                    jump_used = 1;
+                    jump_from_pos = pos;
+                    jump_to_pos = nextPos;
+                    dump_kmer();
                     break;
                   } else {
+                    jump_used = 1;
+                    jump_from_pos = pos;
+                    jump_to_pos = nextPos;
                     kit = kit2;
                   }
                 }
@@ -1882,6 +1974,7 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
         } else {
           // the sequence is messed up at this point, let's just take the match
           //v.push_back({dbGraph.ecs[val.contig], l-k});
+          dump_kmer();
           break;
         }
       }
@@ -1892,37 +1985,41 @@ donejumping:
     if (backOff) {
       // backup plan, let's play it safe and search incrementally for the rest, until nextStop
       for (int j = 0; kit != kit_end; ++kit,++j) {
-        if (j==skip) {
-          j=0;
-        }
-        if (j==0) {
-          // need to check it
-          const_UnitigMap<Node> um4 = dbg.find(kit->first);
-          if (!um4.isEmpty) {
-            // if k-mer found
-            if (partial) {
-              if (rtmp.isEmpty()) {
-                const auto& rtmp2 = um4.getData()->ec[um4.dist].getIndices();
-                if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
-              } else {
-                const auto& rtmp2 = um4.getData()->ec[um4.dist].getIndices();
-                if (!rtmp2.isEmpty()) rtmp &= rtmp2;
+          if (j==skip) {
+            j=0;
+          }
+          if (j==0) {
+            // need to check it
+            const_UnitigMap<Node> um4 = dbg.find(kit->first);
+            if (!um4.isEmpty) {
+              // if k-mer found
+              if (partial) {
                 if (rtmp.isEmpty()) {
-                  v.clear();
-                  return;
+                  const auto& rtmp2 = um4.getData()->ec[um4.dist].getIndices();
+                  if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
+                } else {
+                  const auto& rtmp2 = um4.getData()->ec[um4.dist].getIndices();
+                  if (!rtmp2.isEmpty()) rtmp &= rtmp2;
+                  if (rtmp.isEmpty()) {
+                    hit_action = "skip";
+                    skip_reason = "intersection_empty";
+                    dump_kmer();
+                    v.clear();
+                    return;
+                  }
                 }
               }
+              v.push_back({um4, kit->second}); // add equivalence class, and position
             }
-            v.push_back({um4, kit->second}); // add equivalence class, and position
           }
-        }
 
-        if (kit->second >= nextPos) {
-          backOff = false;
-          break; // break out of backoff for loop
-        }
+          if (kit->second >= nextPos) {
+            backOff = false;
+            break; // break out of backoff for loop
+          }
       }
     }
+    dump_kmer();
   }
   
   // D-list:

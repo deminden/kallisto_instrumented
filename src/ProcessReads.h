@@ -175,7 +175,7 @@ class MasterProcessor {
 public:
   MasterProcessor (KmerIndex &index, const ProgramOptions& opt, MinCollector &tc, const Transcriptome& model)
     : tc(tc), index(index), model(model), opt(opt), numreads(0), transfer_threshold(1), counter(0)
-    ,nummapped(0), num_umi(0), bufsize(1ULL<<23), tlencount(0), biasCount(0), maxBiasCount((opt.bias) ? 1000000 : 0), last_pseudobatch_id (-1) {
+    ,nummapped(0), num_umi(0), bufsize(1ULL<<23), tlencount(0), biasCount(0), maxBiasCount((opt.bias) ? 1000000 : 0), last_pseudobatch_id (-1), debug_read_counter(0) {
 
       #ifndef NO_HTSLIB
       bamfp = nullptr;
@@ -231,6 +231,21 @@ public:
       }
       if (opt.pseudobam) {
         pseudobatchf_out.open(opt.output + "/pseudoaln.bin", std::ios::out | std::ios::binary);
+      }
+      if (!opt.ec_trace_file.empty()) {
+        ec_trace_out.open(opt.ec_trace_file);
+        ec_trace_out.setf(std::ios::unitbuf);
+        ec_trace_out << "type\tread_id\tread_name1\tread_name2\tpart\thit_idx\tunitig_id\tunitig_pos\tread_pos\tblock_id\tblock_lb\tblock_ub\tec\trunning_ec\taction\n";
+      }
+      if (!opt.hit_dump_file.empty()) {
+        hit_dump_out.open(opt.hit_dump_file);
+        hit_dump_out.setf(std::ios::unitbuf);
+        hit_dump_out << "read_id\tread_name\tpart\thit_idx\tunitig_id\tunitig_pos\tread_pos\tkmer\tblock_id\tblock_lb\tblock_ub\n";
+      }
+      if (!opt.kmer_dump_file.empty()) {
+        kmer_dump_out.open(opt.kmer_dump_file);
+        kmer_dump_out.setf(std::ios::unitbuf);
+        kmer_dump_out << "read_id\tread_name\tpart\tkmer_idx\tread_pos\tkmer\tis_hit\tis_dlist\tis_dummy_dfk\tminimizer\tminimizer_pos\tminimizer_is_special\tminimizer_is_overcrowded\tminimizer_is_abundant\tminimizer_hit_count\tjump_used\tjump_from_pos\tjump_to_pos\thit_action\tskip_reason\n";
       }
       if (opt.bus_mode || opt.batch_mode) {
         memset(&bus_bc_len[0],0,sizeof(bus_bc_len));
@@ -320,6 +335,13 @@ public:
   std::ofstream onovel;
   std::ofstream pseudobatchf_out;
   std::ofstream busf_out;
+  std::ofstream ec_trace_out;
+  std::ofstream hit_dump_out;
+  std::ofstream kmer_dump_out;
+  std::mutex ec_trace_mutex;
+  std::mutex hit_dump_mutex;
+  std::mutex kmer_dump_mutex;
+  std::atomic<int64_t> debug_read_counter;
   std::ifstream pseudobatchf_in;
   std::vector<PseudoAlignmentBatch> pseudobatch_stragglers;
   int last_pseudobatch_id;

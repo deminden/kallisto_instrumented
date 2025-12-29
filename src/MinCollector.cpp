@@ -1,6 +1,30 @@
 #include "MinCollector.h"
 #include <algorithm>
 #include <limits>
+#include <sstream>
+
+thread_local ECTraceContext* g_ec_trace_ctx = nullptr;
+
+void SetECTraceContext(ECTraceContext* ctx) {
+  g_ec_trace_ctx = ctx;
+}
+
+void ClearECTraceContext() {
+  g_ec_trace_ctx = nullptr;
+}
+
+static std::string roaringToString(const Roaring& r) {
+  std::ostringstream oss;
+  bool first = true;
+  for (auto x : r) {
+    if (!first) {
+      oss << ",";
+    }
+    first = false;
+    oss << x;
+  }
+  return oss.str();
+}
 
 // utility functions
 
@@ -120,9 +144,15 @@ int MinCollector::intersectKmersCFC(std::vector<std::pair<const_UnitigMap<Node>,
 
 int MinCollector::modeKmers(std::vector<std::pair<const_UnitigMap<Node>, int32_t>>& v1,
                           std::vector<std::pair<const_UnitigMap<Node>, int32_t>>& v2, bool nonpaired, Roaring& r) const {
+  if (g_ec_trace_ctx) {
+    g_ec_trace_ctx->part = nonpaired ? "single" : "r1";
+  }
   Roaring u1 = intersectECs(v1);
   if (u1.isEmpty()) { u1 = modeECs(v1); }
   
+  if (g_ec_trace_ctx) {
+    g_ec_trace_ctx->part = "r2";
+  }
   Roaring u2 = intersectECs(v2);
   if (u2.isEmpty()) { u2 = modeECs(v2); }
 
@@ -161,7 +191,13 @@ int MinCollector::intersectKmers(std::vector<std::pair<const_UnitigMap<Node>, in
                           std::vector<std::pair<const_UnitigMap<Node>, int32_t>>& v2, bool nonpaired, Roaring& r) const {
   Roaring u1, u2;
   if (!index.do_union) {
+    if (g_ec_trace_ctx) {
+      g_ec_trace_ctx->part = nonpaired ? "single" : "r1";
+    }
     u1 = intersectECs(v1);
+    if (g_ec_trace_ctx) {
+      g_ec_trace_ctx->part = "r2";
+    }
     u2 = intersectECs(v2);
   } else {
     u1 = unionECs(v1);
@@ -437,11 +473,46 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
          }
        }); // sort by contig, and then first position
 
-  
+  auto trace_hit = [&](int hit_idx, const std::pair<const_UnitigMap<Node>, int32_t>& hit, const Roaring& ec, const Roaring& running, const char* action) {
+    if (!g_ec_trace_ctx || !g_ec_trace_ctx->out || !g_ec_trace_ctx->out_mutex) {
+      return;
+    }
+    const Node* n = hit.first.getData();
+    int block_id = -1;
+    int block_lb = -1;
+    int block_ub = -1;
+    if (n->ec.flag != 0) {
+      auto block_idx = n->ec.block_index(hit.first.dist);
+      auto block_range = n->ec.get_block_at(hit.first.dist);
+      block_id = static_cast<int>(block_idx.first);
+      block_lb = static_cast<int>(block_range.first);
+      block_ub = static_cast<int>(block_range.second);
+    }
+    std::ostringstream line;
+    line << "HIT\t" << g_ec_trace_ctx->read_id
+         << "\t" << g_ec_trace_ctx->read_name
+         << "\t" << (g_ec_trace_ctx->read_name2.empty() ? "-" : g_ec_trace_ctx->read_name2)
+         << "\t" << (g_ec_trace_ctx->part ? g_ec_trace_ctx->part : "-")
+         << "\t" << hit_idx
+         << "\t" << n->id
+         << "\t" << hit.first.dist
+         << "\t" << hit.second
+         << "\t" << block_id
+         << "\t" << block_lb
+         << "\t" << block_ub
+         << "\t" << roaringToString(ec)
+         << "\t" << roaringToString(running)
+         << "\t" << action
+         << "\n";
+    std::lock_guard<std::mutex> lock(*g_ec_trace_ctx->out_mutex);
+    (*g_ec_trace_ctx->out) << line.str();
+  };
+
   r = v[0].first.getData()->ec[v[0].first.dist].getIndices();
   // Begin Shading
   if (index.use_shade) r = r - index.shade_sequences;
   // End Shading
+  trace_hit(0, v[0], r, r, r.isEmpty() ? "seed_empty" : "seed");
   bool found_nonempty = !r.isEmpty();
   Roaring lastEC = r;
   Roaring ec;
@@ -455,6 +526,7 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
       if (index.use_shade) r = r - index.shade_sequences;
       // End Shading
       found_nonempty = !r.isEmpty();
+      trace_hit(i, v[i], r, r, found_nonempty ? "seed" : "seed_empty");
     }
 
     if (!v[i].first.isSameReferenceUnitig(v[i-1].first) ||
@@ -471,11 +543,19 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
           includeDList(r, ec, index.onlist_sequences);
         }
         r &= ec;
+        trace_hit(i, v[i], ec, r, "intersect");
         if (r.isEmpty()) {
+          trace_hit(i, v[i], ec, r, "intersect_empty");
           return r;
         }
         lastEC = std::move(ec);
+      } else {
+        trace_hit(i, v[i], ec, r, ec.isEmpty() ? "skip_empty" : "skip_same");
       }
+    } else {
+      ec = v[i].first.getData()->ec[v[i].first.dist].getIndices();
+      if (index.use_shade) ec = ec - index.shade_sequences;
+      trace_hit(i, v[i], ec, r, "skip_same");
     }
   }
 

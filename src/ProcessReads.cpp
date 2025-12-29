@@ -1,5 +1,6 @@
 #include <fstream>
 #include <limits>
+#include <sstream>
 
 #include <iomanip>
 
@@ -11,6 +12,62 @@
 #include "Node.hpp"
 #include <unordered_set>                                                                                                                                                                                     
 #include <algorithm>
+
+static std::string roaringToString(const Roaring& r) {
+  std::ostringstream oss;
+  bool first = true;
+  for (auto x : r) {
+    if (!first) {
+      oss << ",";
+    }
+    first = false;
+    oss << x;
+  }
+  return oss.str();
+}
+
+static std::string nameToString(const std::pair<const char*, int>& name) {
+  if (!name.first || name.second <= 0) {
+    return "-";
+  }
+  return std::string(name.first, name.second);
+}
+
+static void dumpHitLines(MasterProcessor& mp, int64_t read_id, const std::string& read_name,
+                         const char* part, const std::vector<std::pair<const_UnitigMap<Node>, int32_t>>& v) {
+  if (!mp.hit_dump_out.is_open()) {
+    return;
+  }
+  std::ostringstream lines;
+  for (int i = 0; i < static_cast<int>(v.size()); ++i) {
+    const auto& hit = v[i];
+    const Node* n = hit.first.getData();
+    int block_id = -1;
+    int block_lb = -1;
+    int block_ub = -1;
+    if (n->ec.flag != 0) {
+      auto block_idx = n->ec.block_index(hit.first.dist);
+      auto block_range = n->ec.get_block_at(hit.first.dist);
+      block_id = static_cast<int>(block_idx.first);
+      block_lb = static_cast<int>(block_range.first);
+      block_ub = static_cast<int>(block_range.second);
+    }
+    lines << read_id
+          << "\t" << read_name
+          << "\t" << (part ? part : "-")
+          << "\t" << i
+          << "\t" << n->id
+          << "\t" << hit.first.dist
+          << "\t" << hit.second
+          << "\t" << hit.first.getUnitigKmer(hit.first.dist).toString()
+          << "\t" << block_id
+          << "\t" << block_lb
+          << "\t" << block_ub
+          << "\n";
+  }
+  std::lock_guard<std::mutex> lock(mp.hit_dump_mutex);
+  mp.hit_dump_out << lines.str();
+}
 
 void printVector(const std::vector<int>& v, std::ostream& o) {
   o << "[";
@@ -935,11 +992,12 @@ void ReadProcessor::operator()() {
   while (true) {
     int readbatch_id;
     // grab the reader lock
+    bool want_full = mp.opt.pseudobam || mp.opt.fusion || !mp.opt.ec_trace_file.empty() || !mp.opt.hit_dump_file.empty() || !mp.opt.kmer_dump_file.empty();
     if (mp.opt.batch_mode) {
       if (batchSR.empty()) {
         return;
       } else {
-        batchSR.fetchSequences(buffer, bufsize, seqs, names, quals, flags, umis, readbatch_id, mp.opt.pseudobam );
+        batchSR.fetchSequences(buffer, bufsize, seqs, names, quals, flags, umis, readbatch_id, want_full);
       }
     } else {
       std::lock_guard<std::mutex> lock(mp.reader_lock);
@@ -948,7 +1006,7 @@ void ReadProcessor::operator()() {
         return;
       } else {
         // get new sequences
-        mp.SR->fetchSequences(buffer, bufsize, seqs, names, quals, flags, umis, readbatch_id, mp.opt.pseudobam || mp.opt.fusion);
+        mp.SR->fetchSequences(buffer, bufsize, seqs, names, quals, flags, umis, readbatch_id, want_full);
       }
 
       // release the reader lock
@@ -1032,6 +1090,8 @@ void ReadProcessor::processBuffer() {
 
   // actually process the sequences
   for (int i = 0; i < seqs.size(); i++) {
+    int i1 = i;
+    int i2 = paired ? (i + 1) : -1;
 
     s1 = seqs[i].first;
     l1 = seqs[i].second;
@@ -1050,15 +1110,89 @@ void ReadProcessor::processBuffer() {
     
     bool novel = false;
     double unmapped_r=0; 
+    bool trace_enabled = mp.ec_trace_out.is_open();
+    bool hit_enabled = mp.hit_dump_out.is_open();
+    bool kmer_enabled = mp.kmer_dump_out.is_open();
+    std::string read_name1 = "-";
+    std::string read_name2;
+    if ((trace_enabled || hit_enabled || kmer_enabled) && i1 < static_cast<int>(names.size())) {
+      read_name1 = nameToString(names[i1]);
+      if (paired && i2 >= 0 && i2 < static_cast<int>(names.size())) {
+        read_name2 = nameToString(names[i2]);
+      }
+    }
+    int64_t debug_read_id = -1;
+    if (trace_enabled || hit_enabled || kmer_enabled) {
+      debug_read_id = mp.debug_read_counter.fetch_add(1);
+    }
+
     if (mp.opt.long_read) {
       unmapped_r = index.match_long(s1, l1, v1, !paired);
-      std::cerr << unmapped_r << "," << std::endl; 
+      std::cerr << unmapped_r << "," << std::endl;
       novel = (unmapped_r > mp.opt.threshold*l1);
     } else {
+      KmerDumpContext kmer_ctx;
+      bool kmer_active = false;
+      if (kmer_enabled && (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads)) {
+        kmer_ctx.out = &mp.kmer_dump_out;
+        kmer_ctx.out_mutex = &mp.kmer_dump_mutex;
+        kmer_ctx.read_id = debug_read_id;
+        kmer_ctx.read_name = read_name1;
+        kmer_ctx.part = paired ? "r1" : "single";
+        SetKmerDumpContext(&kmer_ctx);
+        kmer_active = true;
+      }
       index.match(s1, l1, v1, !paired);
+      if (kmer_active) {
+        ClearKmerDumpContext();
+      }
     }
     if (paired) {
+      KmerDumpContext kmer_ctx;
+      bool kmer_active = false;
+      if (kmer_enabled && (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads)) {
+        kmer_ctx.out = &mp.kmer_dump_out;
+        kmer_ctx.out_mutex = &mp.kmer_dump_mutex;
+        kmer_ctx.read_id = debug_read_id;
+        kmer_ctx.read_name = read_name2.empty() ? "-" : read_name2;
+        kmer_ctx.part = "r2";
+        SetKmerDumpContext(&kmer_ctx);
+        kmer_active = true;
+      }
       index.match(s2, l2, v2, !paired);
+      if (kmer_active) {
+        ClearKmerDumpContext();
+      }
+    }
+    if (hit_enabled) {
+      dumpHitLines(mp, debug_read_id, read_name1, paired ? "r1" : "single", v1);
+      if (paired) {
+        dumpHitLines(mp, debug_read_id, read_name2, "r2", v2);
+      }
+    }
+    ECTraceContext trace_ctx;
+    bool trace_this_read = false;
+    if (trace_enabled && (mp.opt.ec_trace_max_reads <= 0 || debug_read_id < mp.opt.ec_trace_max_reads)) {
+      trace_ctx.out = &mp.ec_trace_out;
+      trace_ctx.out_mutex = &mp.ec_trace_mutex;
+      trace_ctx.read_id = debug_read_id;
+      trace_ctx.read_name = read_name1;
+      trace_ctx.read_name2 = paired ? read_name2 : std::string();
+      trace_ctx.paired = paired;
+      trace_ctx.part = "meta";
+      SetECTraceContext(&trace_ctx);
+      trace_this_read = true;
+
+      std::ostringstream meta;
+      meta << "len1=" << l1 << ";len2=" << (paired ? l2 : 0)
+           << ";hits1=" << v1.size() << ";hits2=" << (paired ? v2.size() : 0);
+      std::ostringstream line;
+      line << "READ\t" << debug_read_id
+           << "\t" << read_name1
+           << "\t" << (paired ? read_name2 : "-")
+           << "\tmeta\t-\t-\t-\t-\t-\t-\t-\t-\t-\t" << meta.str() << "\n";
+      std::lock_guard<std::mutex> lock(mp.ec_trace_mutex);
+      mp.ec_trace_out << line.str();
     }
 
     // collect the target information
@@ -1078,6 +1212,30 @@ void ReadProcessor::processBuffer() {
         //searchFusion(index,mp.opt,tc,mp,ec,names[i-1].first,s1,v1,names[i].first,s2,v2,paired);
       }
       novel = true; 
+    }
+
+    if (trace_this_read) {
+      const char* reason = "ok";
+      if (u.isEmpty()) {
+        if (v1.empty() && v2.empty()) {
+          reason = "no_hits";
+        } else if (r == -1) {
+          reason = "empty_intersection";
+        } else {
+          reason = "offlist_only";
+        }
+      }
+      std::string ec_str = u.isEmpty() ? "-" : roaringToString(u);
+      std::ostringstream line;
+      line << "FINAL\t" << debug_read_id
+           << "\t" << read_name1
+           << "\t" << (paired ? read_name2 : "-")
+           << "\tfinal\t-\t-\t-\t-\t-\t-\t-\t" << ec_str
+           << "\t" << ec_str
+           << "\t" << reason << "\n";
+      std::lock_guard<std::mutex> lock(mp.ec_trace_mutex);
+      mp.ec_trace_out << line.str();
+      ClearECTraceContext();
     }
 
     if (mp.opt.long_read && (r == -1 || u.isEmpty()) && mp.opt.unmapped) {

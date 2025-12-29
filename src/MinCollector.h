@@ -5,14 +5,29 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
 
 #include "KmerIndex.h"
 #include "weights.h"
 #include "Node.hpp"
 
 const int MAX_FRAG_LEN = 1000;
+
+struct ECTraceContext {
+  std::ostream* out;
+  std::mutex* out_mutex;
+  int64_t read_id;
+  std::string read_name;
+  std::string read_name2;
+  bool paired;
+  const char* part;
+};
+
+void SetECTraceContext(ECTraceContext* ctx);
+void ClearECTraceContext();
 
 struct MinCollector {
 

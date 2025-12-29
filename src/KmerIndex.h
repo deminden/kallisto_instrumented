@@ -9,6 +9,7 @@
 #include <iostream>
 #include <numeric>
 #include <limits>
+#include <mutex>
 
 #include "common.h"
 #include "Kmer.hpp"
@@ -47,6 +48,17 @@ struct RoaringHasher {
   }
 };
 typedef u_map_<Roaring, int32_t, RoaringHasher> EcMapInv;
+
+struct KmerDumpContext {
+  std::ostream* out;
+  std::mutex* out_mutex;
+  int64_t read_id;
+  std::string read_name;
+  const char* part;
+};
+
+void SetKmerDumpContext(KmerDumpContext* ctx);
+void ClearKmerDumpContext();
 
 struct KmerEntry {
   int32_t contig; // id of contig

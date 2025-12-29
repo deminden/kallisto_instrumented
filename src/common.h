@@ -159,6 +159,13 @@ struct ProgramOptions {
   std::string genemap;
   std::string priors;
   std::string tmp_dir;
+  std::string ec_trace_file;
+  std::string hit_dump_file;
+  std::string kmer_dump_file;
+  std::string index_ec_dump_file;
+  int ec_trace_max_reads;
+  int kmer_dump_max_reads;
+  int index_ec_dump_limit;
 
 ProgramOptions() :
   verbose(false),
@@ -204,7 +211,10 @@ ProgramOptions() :
   distinguish(false),
   d_list_overhang(1),
   do_union(false),
-  no_jump(false)
+  no_jump(false),
+  ec_trace_max_reads(0),
+  kmer_dump_max_reads(0),
+  index_ec_dump_limit(1000)
   {}
 };
 

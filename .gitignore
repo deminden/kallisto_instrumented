@@ -20,6 +20,10 @@ release/
 .vscode/
 ext/htslib/src/htslib-stamp
 ext/htslib/tmp/
+ext/htslib/aclocal.m4
+ext/htslib/config.guess
+ext/htslib/config.sub
+ext/htslib/install-sh
 ext/bifrost/tmp/
 ext/bifrost/build/
 ext/bifrost/src/bifrost-stamp/

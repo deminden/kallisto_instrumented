@@ -1118,6 +1118,63 @@ const_UnitigMap<U, G> CompactedDBG<U, G>::find(const Kmer& km, const bool extrem
     return const_UnitigMap<U, G>();
 }
 
+template<typename U, typename G>
+bool CompactedDBG<U, G>::getMinimizerDebug(const Kmer& km, MinimizerDebugInfo& info) const {
+
+    info.valid = false;
+    info.minimizer_pos = -1;
+    info.is_special = false;
+    info.is_overcrowded = false;
+    info.is_abundant = false;
+    info.hit_count = -1;
+
+    if (invalid) return false;
+
+    char km_tmp[MAX_KMER_SIZE];
+    km.toString(km_tmp);
+
+    minHashKmer<RepHash> it_min(km_tmp, k_, g_, RepHash(), true), it_min_end;
+
+    if (it_min == it_min_end) return false;
+
+    const int mhr_pos = it_min.getPosition();
+    Minimizer minz(Minimizer(km_tmp + mhr_pos).rep());
+
+    info.minimizer = minz;
+    info.minimizer_pos = mhr_pos;
+    info.valid = true;
+
+    MinimizerIndex::const_iterator it = hmap_min_unitigs.find(minz);
+
+    if (it == hmap_min_unitigs.end()) return true;
+
+    const packed_tiny_vector& v = it.getVector();
+    const uint8_t flag_v = it.getVectorSize();
+    const int v_sz = v.size(flag_v);
+
+    int32_t hit_count = v_sz;
+
+    for (int i = 0; i < v_sz; ++i) {
+        const size_t unitig_id_pos = v(i, flag_v);
+        const size_t unitig_id = unitig_id_pos >> 32;
+        if (unitig_id == RESERVED_ID) {
+            info.is_special = true;
+            if ((unitig_id_pos & RESERVED_ID) != 0) {
+                info.is_abundant = true;
+                hit_count = static_cast<int32_t>(unitig_id_pos & MASK_CONTIG_POS);
+            }
+            if ((unitig_id_pos & MASK_CONTIG_TYPE) == MASK_CONTIG_TYPE) {
+                info.is_overcrowded = true;
+            }
+            break;
+        }
+    }
+
+    info.hit_count = hit_count;
+
+    return true;
+}
+
 /*template<typename U, typename G>
 vector<const_UnitigMap<U, G>> CompactedDBG<U, G>::find(const Minimizer& minz) const {
 

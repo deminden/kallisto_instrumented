@@ -331,6 +331,18 @@ class CompactedDBG {
         typedef unitigIterator<U, G, false> iterator; /**< An iterator for the unitigs of the graph. No specific order is assumed. */
         typedef unitigIterator<U, G, true> const_iterator; /**< A constant iterator for the unitigs of the graph. No specific order is assumed. */
 
+        struct MinimizerDebugInfo {
+            Minimizer minimizer;
+            int minimizer_pos;
+            bool is_special;
+            bool is_overcrowded;
+            bool is_abundant;
+            int32_t hit_count;
+            bool valid;
+        };
+
+        bool getMinimizerDebug(const Kmer& km, MinimizerDebugInfo& info) const;
+
         /** Constructor (set up an empty compacted dBG).
         * @param kmer_length is the length k of k-mers used in the graph (each unitig is of length at least k).
         * @param minimizer_length is the length g of minimizers (g < k) used in the graph.

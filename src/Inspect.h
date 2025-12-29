@@ -4,12 +4,25 @@
 #include <iostream>
 #include <unordered_set>
 #include <limits>
+#include <sstream>
 #include "common.h"
 #include "KmerIndex.h"
 #include "GeneModel.h"
 
 using namespace std;
 
+static std::string roaringToStringInspect(const Roaring& r) {
+  std::ostringstream oss;
+  bool first = true;
+  for (auto x : r) {
+    if (!first) {
+      oss << ",";
+    }
+    first = false;
+    oss << x;
+  }
+  return oss.str();
+}
 
 struct ECStruct {
   int ec;
@@ -138,6 +151,34 @@ void InspectIndex(const KmerIndex& index, const ProgramOptions& opt) {
   cout << "[inspect] max EC size = " << ec_info.first << std::endl;
   cout << "[inspect] number of ECs discarded = " << ec_info.second << std::endl;
 
+  if (!opt.index_ec_dump_file.empty()) {
+    std::ofstream dump(opt.index_ec_dump_file);
+    dump << "unitig_id\tunitig_pos\tkmer\tblock_id\tblock_lb\tblock_ub\tec\n";
+    size_t dumped = 0;
+    size_t limit = (opt.index_ec_dump_limit <= 0)
+      ? std::numeric_limits<size_t>::max()
+      : static_cast<size_t>(opt.index_ec_dump_limit);
+    for (const auto& um : index.dbg) {
+      if (dumped >= limit) {
+        break;
+      }
+      const Node* n = um.getData();
+      size_t um_len = um.size;
+      if (um_len < static_cast<size_t>(index.k)) {
+        continue;
+      }
+      for (size_t pos = 0; pos + index.k <= um_len && dumped < limit; ++pos) {
+        auto kmer = um.getUnitigKmer(pos);
+        auto block_idx = n->ec.block_index(pos);
+        auto block_range = n->ec.get_block_at(pos);
+        const auto& ec = block_idx.second.getIndices();
+        dump << n->id << "\t" << pos << "\t" << kmer.toString()
+             << "\t" << block_idx.first << "\t" << block_range.first << "\t" << block_range.second
+             << "\t" << roaringToStringInspect(ec) << "\n";
+        dumped++;
+      }
+    }
+  }
 
   // cout << "#[inspect] Number of k-mers in index = " << index.dbg.nbKmers() << endl;
 
