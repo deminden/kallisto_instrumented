@@ -234,7 +234,7 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
   int do_union_flag = 0;
   int no_jump_flag = 0;
 
-  const char *opt_string = "t:i:l:P:s:o:n:m:d:b:g:c:p:E:R:J:K:M:";
+  const char *opt_string = "t:i:l:P:s:o:n:m:d:b:g:c:p:E:R:J:K:M:A:Q:U:Y:";
   static struct option long_options[] = {
     // long args
     {"verbose", no_argument, &verbose_flag, 1},
@@ -255,6 +255,10 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
     {"hit-dump", required_argument, 0, 'J'},
     {"kmer-dump", required_argument, 0, 'K'},
     {"kmer-dump-max-reads", required_argument, 0, 'M'},
+    {"accepted-hit-stream", required_argument, 0, 'A'},
+    {"jump-decision", required_argument, 0, 'Q'},
+    {"rejected-hit", required_argument, 0, 'U'},
+    {"final-collapse", required_argument, 0, 'Y'},
     // short args
     {"threads", required_argument, 0, 't'},
     {"index", required_argument, 0, 'i'},
@@ -353,6 +357,22 @@ void ParseOptionsEM(int argc, char **argv, ProgramOptions& opt) {
     }
     case 'M': {
       stringstream(optarg) >> opt.kmer_dump_max_reads;
+      break;
+    }
+    case 'A': {
+      opt.accepted_hit_stream_file = optarg;
+      break;
+    }
+    case 'Q': {
+      opt.jump_decision_file = optarg;
+      break;
+    }
+    case 'U': {
+      opt.rejected_hit_file = optarg;
+      break;
+    }
+    case 'Y': {
+      opt.final_collapse_file = optarg;
       break;
     }
 
@@ -2241,7 +2261,11 @@ void usageEM(bool valid_input = true) {
        << "    --ec-trace-max-reads=INT   Limit per-read trace to first N reads (default: 0 = all)" << endl
        << "    --hit-dump=FILE            Dump unitig/block hits per read" << endl
        << "    --kmer-dump=FILE           Dump every inspected k-mer per read" << endl
-       << "    --kmer-dump-max-reads=INT  Limit k-mer dump to first N reads (default: 0 = all)" << endl;
+       << "    --kmer-dump-max-reads=INT  Limit k-mer dump to first N reads (default: 0 = all)" << endl
+       << "    --accepted-hit-stream=FILE Log accepted-hit stream with running EC updates" << endl
+       << "    --jump-decision=FILE       Log jump/backoff decisions per inspected k-mer" << endl
+       << "    --rejected-hit=FILE        Log rejected hit decisions (match/intersection stages)" << endl
+       << "    --final-collapse=FILE      Log first EC-collapse event per read/part" << endl;
 
 }
 

@@ -508,11 +508,71 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
     (*g_ec_trace_ctx->out) << line.str();
   };
 
+  auto dump_accepted_hit = [&](const std::pair<const_UnitigMap<Node>, int32_t>& hit,
+                               const Roaring& ec,
+                               const Roaring& running_before,
+                               const Roaring& running_after,
+                               const char* accept_reason) {
+    if (!g_ec_trace_ctx || !g_ec_trace_ctx->accepted_hit_stream_out || !g_ec_trace_ctx->accepted_hit_stream_mutex) {
+      return;
+    }
+    const Node* n = hit.first.getData();
+    int block_id = -1;
+    if (n->ec.flag != 0) {
+      auto block_idx = n->ec.block_index(hit.first.dist);
+      block_id = static_cast<int>(block_idx.first);
+    }
+    std::ostringstream line;
+    line << g_ec_trace_ctx->read_id
+         << "\t" << hit.second
+         << "\t" << n->id
+         << "\t" << block_id
+         << "\t" << roaringToString(ec)
+         << "\t" << roaringToString(running_before)
+         << "\t" << roaringToString(running_after)
+         << "\t" << accept_reason
+         << "\n";
+    std::lock_guard<std::mutex> lock(*g_ec_trace_ctx->accepted_hit_stream_mutex);
+    (*g_ec_trace_ctx->accepted_hit_stream_out) << line.str();
+  };
+
+  auto dump_rejected_hit = [&](const std::pair<const_UnitigMap<Node>, int32_t>& hit, const char* reject_reason) {
+    if (!g_ec_trace_ctx || !g_ec_trace_ctx->rejected_hit_out || !g_ec_trace_ctx->rejected_hit_mutex) {
+      return;
+    }
+    std::ostringstream line;
+    line << g_ec_trace_ctx->read_id
+         << "\t" << hit.second
+         << "\t" << reject_reason
+         << "\n";
+    std::lock_guard<std::mutex> lock(*g_ec_trace_ctx->rejected_hit_mutex);
+    (*g_ec_trace_ctx->rejected_hit_out) << line.str();
+  };
+
+  auto dump_final_collapse = [&](int collapse_idx, const Roaring& running_before, const Roaring& incoming_ec) {
+    if (!g_ec_trace_ctx || !g_ec_trace_ctx->final_collapse_out || !g_ec_trace_ctx->final_collapse_mutex) {
+      return;
+    }
+    std::ostringstream line;
+    line << g_ec_trace_ctx->read_id
+         << "\t" << collapse_idx
+         << "\t" << roaringToString(running_before)
+         << "\t" << roaringToString(incoming_ec)
+         << "\n";
+    std::lock_guard<std::mutex> lock(*g_ec_trace_ctx->final_collapse_mutex);
+    (*g_ec_trace_ctx->final_collapse_out) << line.str();
+  };
+
   r = v[0].first.getData()->ec[v[0].first.dist].getIndices();
   // Begin Shading
   if (index.use_shade) r = r - index.shade_sequences;
   // End Shading
   trace_hit(0, v[0], r, r, r.isEmpty() ? "seed_empty" : "seed");
+  if (r.isEmpty()) {
+    dump_rejected_hit(v[0], "seed_empty");
+  } else {
+    dump_accepted_hit(v[0], r, Roaring(), r, "seed");
+  }
   bool found_nonempty = !r.isEmpty();
   Roaring lastEC = r;
   Roaring ec;
@@ -527,6 +587,11 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
       // End Shading
       found_nonempty = !r.isEmpty();
       trace_hit(i, v[i], r, r, found_nonempty ? "seed" : "seed_empty");
+      if (!found_nonempty) {
+        dump_rejected_hit(v[i], "seed_empty");
+      } else {
+        dump_accepted_hit(v[i], r, Roaring(), r, "seed");
+      }
     }
 
     if (!v[i].first.isSameReferenceUnitig(v[i-1].first) ||
@@ -539,23 +604,30 @@ Roaring MinCollector::intersectECs(std::vector<std::pair<const_UnitigMap<Node>, 
 
       // Don't intersect empty EC (because of thresholding)
       if (!(ec == lastEC) && !ec.isEmpty()) {
+        Roaring running_before = r;
+        Roaring ec_incoming = ec;
         if (index.dfk_onlist) { // In case we want to not intersect D-list targets
-          includeDList(r, ec, index.onlist_sequences);
+          includeDList(r, ec_incoming, index.onlist_sequences);
         }
-        r &= ec;
-        trace_hit(i, v[i], ec, r, "intersect");
+        r &= ec_incoming;
+        trace_hit(i, v[i], ec_incoming, r, "intersect");
+        dump_accepted_hit(v[i], ec_incoming, running_before, r, "intersect");
         if (r.isEmpty()) {
-          trace_hit(i, v[i], ec, r, "intersect_empty");
+          trace_hit(i, v[i], ec_incoming, r, "intersect_empty");
+          dump_rejected_hit(v[i], "intersect_empty");
+          dump_final_collapse(i, running_before, ec_incoming);
           return r;
         }
-        lastEC = std::move(ec);
+        lastEC = std::move(ec_incoming);
       } else {
         trace_hit(i, v[i], ec, r, ec.isEmpty() ? "skip_empty" : "skip_same");
+        dump_rejected_hit(v[i], ec.isEmpty() ? "empty_ec_skip" : "same_ec_skip");
       }
     } else {
       ec = v[i].first.getData()->ec[v[i].first.dist].getIndices();
       if (index.use_shade) ec = ec - index.shade_sequences;
       trace_hit(i, v[i], ec, r, "skip_same");
+      dump_rejected_hit(v[i], "same_ec_skip");
     }
   }
 

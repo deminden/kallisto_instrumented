@@ -1778,6 +1778,9 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
     std::string skip_reason = "empty";
     bool dumped = false;
     bool dump_enabled = g_kmer_dump_ctx && g_kmer_dump_ctx->out && g_kmer_dump_ctx->out_mutex;
+    bool jump_dump_enabled = g_kmer_dump_ctx && g_kmer_dump_ctx->jump_decision_out && g_kmer_dump_ctx->jump_decision_mutex;
+    bool reject_dump_enabled = g_kmer_dump_ctx && g_kmer_dump_ctx->rejected_hit_out && g_kmer_dump_ctx->rejected_hit_mutex;
+    bool collapse_dump_enabled = g_kmer_dump_ctx && g_kmer_dump_ctx->final_collapse_out && g_kmer_dump_ctx->final_collapse_mutex;
     if (dump_enabled) {
       CompactedDBG<Node>::MinimizerDebugInfo min_info;
       if (dbg.getMinimizerDebug(kit->first, min_info) && min_info.valid) {
@@ -1789,6 +1792,65 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
         minimizer_hit_count = min_info.hit_count;
       }
     }
+    auto roaring_to_string = [&](const Roaring& rr) {
+      std::ostringstream oss;
+      bool first = true;
+      for (auto x : rr) {
+        if (!first) {
+          oss << ",";
+        }
+        first = false;
+        oss << x;
+      }
+      return oss.str();
+    };
+    auto dump_rejected_hit = [&](int read_pos, const char* reason) {
+      if (!reject_dump_enabled) {
+        return;
+      }
+      std::ostringstream line;
+      line << g_kmer_dump_ctx->read_id
+           << "\t" << read_pos
+           << "\t" << reason
+           << "\n";
+      std::lock_guard<std::mutex> lock(*g_kmer_dump_ctx->rejected_hit_mutex);
+      (*g_kmer_dump_ctx->rejected_hit_out) << line.str();
+    };
+    auto dump_jump_decision = [&](int read_pos, int jump_dist, int next_pos, int in_backoff,
+                                  int next_hit_found, int next_same_unitig, int next_same_ec,
+                                  int mid_hit_found, int mid_matches_either, const char* reason) {
+      if (!jump_dump_enabled) {
+        return;
+      }
+      std::ostringstream line;
+      line << g_kmer_dump_ctx->read_id
+           << "\t" << read_pos
+           << "\t" << jump_dist
+           << "\t" << next_pos
+           << "\t" << in_backoff
+           << "\t" << next_hit_found
+           << "\t" << next_same_unitig
+           << "\t" << next_same_ec
+           << "\t" << mid_hit_found
+           << "\t" << mid_matches_either
+           << "\t" << reason
+           << "\n";
+      std::lock_guard<std::mutex> lock(*g_kmer_dump_ctx->jump_decision_mutex);
+      (*g_kmer_dump_ctx->jump_decision_out) << line.str();
+    };
+    auto dump_final_collapse = [&](int collapse_idx, const Roaring& running_before, const Roaring& incoming_ec) {
+      if (!collapse_dump_enabled) {
+        return;
+      }
+      std::ostringstream line;
+      line << g_kmer_dump_ctx->read_id
+           << "\t" << collapse_idx
+           << "\t" << roaring_to_string(running_before)
+           << "\t" << roaring_to_string(incoming_ec)
+           << "\n";
+      std::lock_guard<std::mutex> lock(*g_kmer_dump_ctx->final_collapse_mutex);
+      (*g_kmer_dump_ctx->final_collapse_out) << line.str();
+    };
     auto dump_kmer = [&]() {
       if (!dump_enabled || dumped) {
         return;
@@ -1832,10 +1894,13 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
           if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
         } else {
           const auto& rtmp2 = um.getData()->ec[um.dist].getIndices();
+          Roaring running_before = rtmp;
           if (!rtmp2.isEmpty()) rtmp &= rtmp2;
           if (rtmp.isEmpty()) {
             hit_action = "skip";
             skip_reason = "intersection_empty";
+            dump_final_collapse(i, running_before, rtmp2);
+            dump_rejected_hit(pos, "match_intersection_empty");
             dump_kmer();
             v.clear();
             return;
@@ -1846,6 +1911,7 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
       v.push_back({um, kit->second});
       
       if (no_jump) {
+        dump_jump_decision(pos, 0, pos, backOff ? 1 : 0, 0, 0, 0, 0, 0, "jump_disabled");
         dump_kmer();
         continue;
       }
@@ -1879,11 +1945,14 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
           const_UnitigMap<Node> um2 = dbg.find(kit2->first);
           bool found2 = false;
           int  found2pos = pos+dist;
+          bool next_hit_found = !um2.isEmpty;
+          bool next_same_unitig = !um2.isEmpty && um.isSameReferenceUnitig(um2);
+          bool next_same_ec = next_same_unitig &&
+                              (n->ec[um.dist] == um2.getData()->ec[um2.dist]);
           if (um2.isEmpty) {
             found2=true;
             found2pos = pos;
-          } else if (um.isSameReferenceUnitig(um2) &&
-                     n->ec[um.dist] == um2.getData()->ec[um2.dist]) {
+          } else if (next_same_ec) {
             // um and um2 are on the same unitig and also share the same EC
             found2=true;
             found2pos = pos+dist;
@@ -1896,6 +1965,10 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
               jump_from_pos = pos;
               jump_to_pos = nextPos;
               v.push_back({um, l-k}); // push back a fake position
+              dump_jump_decision(pos, dist, nextPos, backOff ? 1 : 0,
+                                 next_hit_found ? 1 : 0, next_same_unitig ? 1 : 0,
+                                 next_same_ec ? 1 : 0, 0, 0,
+                                 partial && is_in_dlist ? "jump_to_end_dlist" : "jump_to_end");
               if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); dump_kmer(); return; } // D-list
               dump_kmer();
               break; //
@@ -1904,12 +1977,18 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
               jump_from_pos = pos;
               jump_to_pos = nextPos;
               v.push_back({um, found2pos});
+              dump_jump_decision(pos, dist, nextPos, backOff ? 1 : 0,
+                                 next_hit_found ? 1 : 0, next_same_unitig ? 1 : 0,
+                                 next_same_ec ? 1 : 0, 0, 0,
+                                 (found2pos == pos) ? "jump_stay_next_empty" : "jump_forward");
               kit = kit2; // move iterator to this new position
               if (partial && is_in_dlist) { v.push_back({um_dummy, kit2->second}); dump_kmer(); return; } // D-list
             }
           } else {
             // this is weird, let's try the middle k-mer
             bool foundMiddle = false;
+            bool middle_hit_found = false;
+            bool middle_matches_either = false;
             if (dist > 4) {
               int middlePos = (pos + nextPos)/2;
               int middleContig = -1;
@@ -1919,14 +1998,17 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
 
               if (kit3 != kit_end) {
                 const_UnitigMap<Node> um3 = dbg.find(kit3->first);
+                middle_hit_found = !um3.isEmpty;
                 if (!um3.isEmpty) {
                   if (um.isSameReferenceUnitig(um3) &&
                       n->ec[um.dist] == um3.getData()->ec[um3.dist]) {
                     foundMiddle = true;
+                    middle_matches_either = true;
                     found3pos = middlePos;
                   } else if (um2.isSameReferenceUnitig(um3) &&
                              um2.getData()->ec[um2.dist] == um3.getData()->ec[um3.dist]) {
                     foundMiddle = true;
+                    middle_matches_either = true;
                     found3pos = pos+dist;
                   }
                 }
@@ -1938,10 +2020,13 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
                       if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
                     } else {
                 const auto& rtmp2 = um3.getData()->ec[um3.dist].getIndices();
+                Roaring running_before = rtmp;
                 if (!rtmp2.isEmpty()) rtmp &= rtmp2;
                 if (rtmp.isEmpty()) {
                   hit_action = "skip";
                   skip_reason = "intersection_empty";
+                  dump_final_collapse(i, running_before, rtmp2);
+                  dump_rejected_hit(pos, "match_intersection_empty_middle");
                   dump_kmer();
                   v.clear();
                   return;
@@ -1953,12 +2038,22 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
                     jump_used = 1;
                     jump_from_pos = pos;
                     jump_to_pos = nextPos;
+                    dump_jump_decision(pos, dist, nextPos, backOff ? 1 : 0,
+                                       next_hit_found ? 1 : 0, next_same_unitig ? 1 : 0,
+                                       next_same_ec ? 1 : 0,
+                                       middle_hit_found ? 1 : 0, middle_matches_either ? 1 : 0,
+                                       "jump_middle_to_end");
                     dump_kmer();
                     break;
                   } else {
                     jump_used = 1;
                     jump_from_pos = pos;
                     jump_to_pos = nextPos;
+                    dump_jump_decision(pos, dist, nextPos, backOff ? 1 : 0,
+                                       next_hit_found ? 1 : 0, next_same_unitig ? 1 : 0,
+                                       next_same_ec ? 1 : 0,
+                                       middle_hit_found ? 1 : 0, middle_matches_either ? 1 : 0,
+                                       "jump_middle_forward");
                     kit = kit2;
                   }
                 }
@@ -1966,6 +2061,11 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
             }
 
             if (!foundMiddle) {
+              dump_jump_decision(pos, dist, nextPos, 1,
+                                 next_hit_found ? 1 : 0, next_same_unitig ? 1 : 0,
+                                 next_same_ec ? 1 : 0,
+                                 middle_hit_found ? 1 : 0, middle_matches_either ? 1 : 0,
+                                 "enter_backoff");
               ++kit;
               backOff = true;
               goto donejumping; // sue me Dijkstra!
@@ -1974,9 +2074,12 @@ void KmerIndex::match(const char *s, int l, std::vector<std::pair<const_UnitigMa
         } else {
           // the sequence is messed up at this point, let's just take the match
           //v.push_back({dbGraph.ecs[val.contig], l-k});
+          dump_jump_decision(pos, dist, nextPos, backOff ? 1 : 0, 0, 0, 0, 0, 0, "next_iterator_end");
           dump_kmer();
           break;
         }
+      } else {
+        dump_jump_decision(pos, dist, pos, backOff ? 1 : 0, 0, 0, 0, 0, 0, "dist_lt_2");
       }
     }
 
@@ -1999,10 +2102,13 @@ donejumping:
                   if (!rtmp2.isEmpty()) rtmp = std::move(rtmp2);
                 } else {
                   const auto& rtmp2 = um4.getData()->ec[um4.dist].getIndices();
+                  Roaring running_before = rtmp;
                   if (!rtmp2.isEmpty()) rtmp &= rtmp2;
                   if (rtmp.isEmpty()) {
                     hit_action = "skip";
                     skip_reason = "intersection_empty";
+                    dump_final_collapse(i, running_before, rtmp2);
+                    dump_rejected_hit(kit->second, "match_intersection_empty_backoff");
                     dump_kmer();
                     v.clear();
                     return;

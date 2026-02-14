@@ -52,6 +52,14 @@ typedef u_map_<Roaring, int32_t, RoaringHasher> EcMapInv;
 struct KmerDumpContext {
   std::ostream* out;
   std::mutex* out_mutex;
+  std::ostream* accepted_hit_out;
+  std::mutex* accepted_hit_mutex;
+  std::ostream* jump_decision_out;
+  std::mutex* jump_decision_mutex;
+  std::ostream* rejected_hit_out;
+  std::mutex* rejected_hit_mutex;
+  std::ostream* final_collapse_out;
+  std::mutex* final_collapse_mutex;
   int64_t read_id;
   std::string read_name;
   const char* part;

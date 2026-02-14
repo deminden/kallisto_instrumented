@@ -22,13 +22,22 @@ All flags write tab-delimited output to the file path you provide.
 - `--ec-trace-max-reads=INT` Limit EC tracing to the first N reads (0 = all).
 - `--hit-dump=FILE` Dump per-read unitig hit details (includes k-mer strings).
 - `--ec-dump=FILE` Dump a subset of index k-mers/minimizers and ECs.
-- `--ec-dump-limit=INT` Limit the number of k-mers/minimizers dumped (0 = all).
+- `--ec-dump-limit=INT` Limit the number of k-mers/minimizers dumped (default: 1000).
 - `--kmer-dump=FILE` Dump every inspected k-mer per read with hit/skip decisions, minimizer flags, and jump info.
 - `--kmer-dump-max-reads=INT` Limit k-mer dump to the first N reads (0 = all).
+- `--accepted-hit-stream=FILE` Dump accepted hit stream with per-hit EC and running-intersection before/after.
+- `--jump-decision=FILE` Dump per-k-mer jump/backoff decisions and reasons.
+- `--rejected-hit=FILE` Dump rejected hit events (`is_hit=1` not accepted or skipped in EC intersection).
+- `--final-collapse=FILE` Dump first collapse event (where running EC becomes empty), including previous and incoming EC sets.
 
 Notes on `--kmer-dump` output fields:
 - Includes per-k-mer `hit_action` (`accept`/`skip`) and `skip_reason` (`empty`, `intersection_empty`, or `-`).
 - Includes minimizer fields (`minimizer`, `minimizer_pos`, `minimizer_is_special`, `minimizer_is_overcrowded`, `minimizer_is_abundant`, `minimizer_hit_count`) and jump info (`jump_used`, `jump_from_pos`, `jump_to_pos`).
+
+Notes on new decision streams:
+- `accepted-hit-stream` rows are emitted during EC seeding/intersection decisions and include `accept_reason` (`seed` or `intersect`).
+- `rejected-hit` includes reasons such as `same_ec_skip`, `empty_ec_skip`, and `intersect_empty`.
+- `final-collapse` may be emitted from either match-stage partial intersection or EC-intersection stage; `collapse_hit_idx` is the local hit index in that stage.
 
 ## Not for production use
 

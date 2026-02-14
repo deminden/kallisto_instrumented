@@ -162,6 +162,10 @@ struct ProgramOptions {
   std::string ec_trace_file;
   std::string hit_dump_file;
   std::string kmer_dump_file;
+  std::string accepted_hit_stream_file;
+  std::string jump_decision_file;
+  std::string rejected_hit_file;
+  std::string final_collapse_file;
   std::string index_ec_dump_file;
   int ec_trace_max_reads;
   int kmer_dump_max_reads;

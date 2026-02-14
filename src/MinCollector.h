@@ -19,6 +19,12 @@ const int MAX_FRAG_LEN = 1000;
 struct ECTraceContext {
   std::ostream* out;
   std::mutex* out_mutex;
+  std::ostream* accepted_hit_stream_out;
+  std::mutex* accepted_hit_stream_mutex;
+  std::ostream* rejected_hit_out;
+  std::mutex* rejected_hit_mutex;
+  std::ostream* final_collapse_out;
+  std::mutex* final_collapse_mutex;
   int64_t read_id;
   std::string read_name;
   std::string read_name2;

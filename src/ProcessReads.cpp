@@ -1113,16 +1113,23 @@ void ReadProcessor::processBuffer() {
     bool trace_enabled = mp.ec_trace_out.is_open();
     bool hit_enabled = mp.hit_dump_out.is_open();
     bool kmer_enabled = mp.kmer_dump_out.is_open();
+    bool accepted_enabled = mp.accepted_hit_stream_out.is_open();
+    bool jump_enabled = mp.jump_decision_out.is_open();
+    bool rejected_enabled = mp.rejected_hit_out.is_open();
+    bool collapse_enabled = mp.final_collapse_out.is_open();
+    bool any_debug_enabled = trace_enabled || hit_enabled || kmer_enabled ||
+                             accepted_enabled || jump_enabled ||
+                             rejected_enabled || collapse_enabled;
     std::string read_name1 = "-";
     std::string read_name2;
-    if ((trace_enabled || hit_enabled || kmer_enabled) && i1 < static_cast<int>(names.size())) {
+    if (any_debug_enabled && i1 < static_cast<int>(names.size())) {
       read_name1 = nameToString(names[i1]);
       if (paired && i2 >= 0 && i2 < static_cast<int>(names.size())) {
         read_name2 = nameToString(names[i2]);
       }
     }
     int64_t debug_read_id = -1;
-    if (trace_enabled || hit_enabled || kmer_enabled) {
+    if (any_debug_enabled) {
       debug_read_id = mp.debug_read_counter.fetch_add(1);
     }
 
@@ -1131,11 +1138,21 @@ void ReadProcessor::processBuffer() {
       std::cerr << unmapped_r << "," << std::endl;
       novel = (unmapped_r > mp.opt.threshold*l1);
     } else {
-      KmerDumpContext kmer_ctx;
+      KmerDumpContext kmer_ctx{};
       bool kmer_active = false;
-      if (kmer_enabled && (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads)) {
-        kmer_ctx.out = &mp.kmer_dump_out;
-        kmer_ctx.out_mutex = &mp.kmer_dump_mutex;
+      bool kmer_row_enabled = kmer_enabled &&
+        (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads);
+      if (kmer_row_enabled || accepted_enabled || jump_enabled || rejected_enabled || collapse_enabled) {
+        kmer_ctx.out = kmer_row_enabled ? &mp.kmer_dump_out : nullptr;
+        kmer_ctx.out_mutex = kmer_row_enabled ? &mp.kmer_dump_mutex : nullptr;
+        kmer_ctx.accepted_hit_out = accepted_enabled ? &mp.accepted_hit_stream_out : nullptr;
+        kmer_ctx.accepted_hit_mutex = accepted_enabled ? &mp.accepted_hit_stream_mutex : nullptr;
+        kmer_ctx.jump_decision_out = jump_enabled ? &mp.jump_decision_out : nullptr;
+        kmer_ctx.jump_decision_mutex = jump_enabled ? &mp.jump_decision_mutex : nullptr;
+        kmer_ctx.rejected_hit_out = rejected_enabled ? &mp.rejected_hit_out : nullptr;
+        kmer_ctx.rejected_hit_mutex = rejected_enabled ? &mp.rejected_hit_mutex : nullptr;
+        kmer_ctx.final_collapse_out = collapse_enabled ? &mp.final_collapse_out : nullptr;
+        kmer_ctx.final_collapse_mutex = collapse_enabled ? &mp.final_collapse_mutex : nullptr;
         kmer_ctx.read_id = debug_read_id;
         kmer_ctx.read_name = read_name1;
         kmer_ctx.part = paired ? "r1" : "single";
@@ -1148,11 +1165,21 @@ void ReadProcessor::processBuffer() {
       }
     }
     if (paired) {
-      KmerDumpContext kmer_ctx;
+      KmerDumpContext kmer_ctx{};
       bool kmer_active = false;
-      if (kmer_enabled && (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads)) {
-        kmer_ctx.out = &mp.kmer_dump_out;
-        kmer_ctx.out_mutex = &mp.kmer_dump_mutex;
+      bool kmer_row_enabled = kmer_enabled &&
+        (mp.opt.kmer_dump_max_reads <= 0 || debug_read_id < mp.opt.kmer_dump_max_reads);
+      if (kmer_row_enabled || accepted_enabled || jump_enabled || rejected_enabled || collapse_enabled) {
+        kmer_ctx.out = kmer_row_enabled ? &mp.kmer_dump_out : nullptr;
+        kmer_ctx.out_mutex = kmer_row_enabled ? &mp.kmer_dump_mutex : nullptr;
+        kmer_ctx.accepted_hit_out = accepted_enabled ? &mp.accepted_hit_stream_out : nullptr;
+        kmer_ctx.accepted_hit_mutex = accepted_enabled ? &mp.accepted_hit_stream_mutex : nullptr;
+        kmer_ctx.jump_decision_out = jump_enabled ? &mp.jump_decision_out : nullptr;
+        kmer_ctx.jump_decision_mutex = jump_enabled ? &mp.jump_decision_mutex : nullptr;
+        kmer_ctx.rejected_hit_out = rejected_enabled ? &mp.rejected_hit_out : nullptr;
+        kmer_ctx.rejected_hit_mutex = rejected_enabled ? &mp.rejected_hit_mutex : nullptr;
+        kmer_ctx.final_collapse_out = collapse_enabled ? &mp.final_collapse_out : nullptr;
+        kmer_ctx.final_collapse_mutex = collapse_enabled ? &mp.final_collapse_mutex : nullptr;
         kmer_ctx.read_id = debug_read_id;
         kmer_ctx.read_name = read_name2.empty() ? "-" : read_name2;
         kmer_ctx.part = "r2";
@@ -1170,29 +1197,40 @@ void ReadProcessor::processBuffer() {
         dumpHitLines(mp, debug_read_id, read_name2, "r2", v2);
       }
     }
-    ECTraceContext trace_ctx;
+    ECTraceContext trace_ctx{};
     bool trace_this_read = false;
-    if (trace_enabled && (mp.opt.ec_trace_max_reads <= 0 || debug_read_id < mp.opt.ec_trace_max_reads)) {
-      trace_ctx.out = &mp.ec_trace_out;
-      trace_ctx.out_mutex = &mp.ec_trace_mutex;
+    bool trace_limit_ok = (mp.opt.ec_trace_max_reads <= 0 || debug_read_id < mp.opt.ec_trace_max_reads);
+    bool ec_ctx_active = false;
+    if ((trace_enabled && trace_limit_ok) || accepted_enabled || rejected_enabled || collapse_enabled) {
+      trace_ctx.out = (trace_enabled && trace_limit_ok) ? &mp.ec_trace_out : nullptr;
+      trace_ctx.out_mutex = (trace_enabled && trace_limit_ok) ? &mp.ec_trace_mutex : nullptr;
+      trace_ctx.accepted_hit_stream_out = accepted_enabled ? &mp.accepted_hit_stream_out : nullptr;
+      trace_ctx.accepted_hit_stream_mutex = accepted_enabled ? &mp.accepted_hit_stream_mutex : nullptr;
+      trace_ctx.rejected_hit_out = rejected_enabled ? &mp.rejected_hit_out : nullptr;
+      trace_ctx.rejected_hit_mutex = rejected_enabled ? &mp.rejected_hit_mutex : nullptr;
+      trace_ctx.final_collapse_out = collapse_enabled ? &mp.final_collapse_out : nullptr;
+      trace_ctx.final_collapse_mutex = collapse_enabled ? &mp.final_collapse_mutex : nullptr;
       trace_ctx.read_id = debug_read_id;
       trace_ctx.read_name = read_name1;
       trace_ctx.read_name2 = paired ? read_name2 : std::string();
       trace_ctx.paired = paired;
       trace_ctx.part = "meta";
       SetECTraceContext(&trace_ctx);
-      trace_this_read = true;
+      ec_ctx_active = true;
+      trace_this_read = trace_enabled && trace_limit_ok;
 
-      std::ostringstream meta;
-      meta << "len1=" << l1 << ";len2=" << (paired ? l2 : 0)
-           << ";hits1=" << v1.size() << ";hits2=" << (paired ? v2.size() : 0);
-      std::ostringstream line;
-      line << "READ\t" << debug_read_id
-           << "\t" << read_name1
-           << "\t" << (paired ? read_name2 : "-")
-           << "\tmeta\t-\t-\t-\t-\t-\t-\t-\t-\t-\t" << meta.str() << "\n";
-      std::lock_guard<std::mutex> lock(mp.ec_trace_mutex);
-      mp.ec_trace_out << line.str();
+      if (trace_this_read) {
+        std::ostringstream meta;
+        meta << "len1=" << l1 << ";len2=" << (paired ? l2 : 0)
+             << ";hits1=" << v1.size() << ";hits2=" << (paired ? v2.size() : 0);
+        std::ostringstream line;
+        line << "READ\t" << debug_read_id
+             << "\t" << read_name1
+             << "\t" << (paired ? read_name2 : "-")
+             << "\tmeta\t-\t-\t-\t-\t-\t-\t-\t-\t-\t" << meta.str() << "\n";
+        std::lock_guard<std::mutex> lock(mp.ec_trace_mutex);
+        mp.ec_trace_out << line.str();
+      }
     }
 
     // collect the target information
@@ -1235,6 +1273,8 @@ void ReadProcessor::processBuffer() {
            << "\t" << reason << "\n";
       std::lock_guard<std::mutex> lock(mp.ec_trace_mutex);
       mp.ec_trace_out << line.str();
+    }
+    if (ec_ctx_active) {
       ClearECTraceContext();
     }
 

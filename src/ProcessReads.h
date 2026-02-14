@@ -247,6 +247,26 @@ public:
         kmer_dump_out.setf(std::ios::unitbuf);
         kmer_dump_out << "read_id\tread_name\tpart\tkmer_idx\tread_pos\tkmer\tis_hit\tis_dlist\tis_dummy_dfk\tminimizer\tminimizer_pos\tminimizer_is_special\tminimizer_is_overcrowded\tminimizer_is_abundant\tminimizer_hit_count\tjump_used\tjump_from_pos\tjump_to_pos\thit_action\tskip_reason\n";
       }
+      if (!opt.accepted_hit_stream_file.empty()) {
+        accepted_hit_stream_out.open(opt.accepted_hit_stream_file);
+        accepted_hit_stream_out.setf(std::ios::unitbuf);
+        accepted_hit_stream_out << "read_id\tread_pos\tunitig_id\tblock_id\tec\trunning_ec_before\trunning_ec_after\taccept_reason\n";
+      }
+      if (!opt.jump_decision_file.empty()) {
+        jump_decision_out.open(opt.jump_decision_file);
+        jump_decision_out.setf(std::ios::unitbuf);
+        jump_decision_out << "read_id\tread_pos\tjump_dist\tnext_pos\tin_backoff\tnext_hit_found\tnext_same_unitig\tnext_same_ec\tmid_hit_found\tmid_matches_either\tdecision_reason\n";
+      }
+      if (!opt.rejected_hit_file.empty()) {
+        rejected_hit_out.open(opt.rejected_hit_file);
+        rejected_hit_out.setf(std::ios::unitbuf);
+        rejected_hit_out << "read_id\tread_pos\treject_reason\n";
+      }
+      if (!opt.final_collapse_file.empty()) {
+        final_collapse_out.open(opt.final_collapse_file);
+        final_collapse_out.setf(std::ios::unitbuf);
+        final_collapse_out << "read_id\tcollapse_hit_idx\trunning_ec_before\tincoming_ec\n";
+      }
       if (opt.bus_mode || opt.batch_mode) {
         memset(&bus_bc_len[0],0,sizeof(bus_bc_len));
         memset(&bus_umi_len[0],0,sizeof(bus_umi_len));
@@ -338,9 +358,17 @@ public:
   std::ofstream ec_trace_out;
   std::ofstream hit_dump_out;
   std::ofstream kmer_dump_out;
+  std::ofstream accepted_hit_stream_out;
+  std::ofstream jump_decision_out;
+  std::ofstream rejected_hit_out;
+  std::ofstream final_collapse_out;
   std::mutex ec_trace_mutex;
   std::mutex hit_dump_mutex;
   std::mutex kmer_dump_mutex;
+  std::mutex accepted_hit_stream_mutex;
+  std::mutex jump_decision_mutex;
+  std::mutex rejected_hit_mutex;
+  std::mutex final_collapse_mutex;
   std::atomic<int64_t> debug_read_counter;
   std::ifstream pseudobatchf_in;
   std::vector<PseudoAlignmentBatch> pseudobatch_stragglers;
